@@ -37,6 +37,8 @@ npx tsx src/scrape.ts "https://www.kupujemprodajem.com/automobili/opel/opel-meri
 | `--sort price\|date\|views` | `price` | price ascending (EUR-normalized, no-price last); date newest first; views most first |
 | `--out DIR` | `./output` | output root; cache is in `DIR/.cache` |
 | `--skip-sellers` | off | skip seller pages (no "active ads" count) |
+| `--delay MIN-MAX` | `1.5-4` | seconds between requests (MIN ≥ 1.5) |
+| `--refresh-search` | off | re-fetch result pages even if cached |
 
 Behind a proxy, `HTTPS_PROXY` / `NO_PROXY` are honored.
 
@@ -58,8 +60,16 @@ Behind a proxy, `HTTPS_PROXY` / `NO_PROXY` are honored.
   and the reason is printed (exit code 2).
 - Ctrl+C stops after the current request and writes partial results.
 
+## If KP blocks you
+
+KP rate-limits per IP; the default pace got an anti-bot check after ~140 requests.
+The scraper stops, writes what it has, and the cache keeps it. Wait a few hours, then
+rerun the same command slower, e.g. `--delay 6-12 --skip-sellers`. It resumes where it
+stopped. Don't try to get around the block (VPN/IP rotation, captcha solving).
+
 ## Resuming
 
+Result pages are cached for 24h in `<out>/.cache/search/`, so a rerun doesn't re-walk them.
 Every fetched ad is cached as JSON in `<out>/.cache/ads/<adId>.json` (seller counts in
 `.cache/sellers/`). Rerunning with the same `--out` skips cached ads; failed ads aren't
 cached, so they're retried. Delete `.cache` to force a fresh scrape.

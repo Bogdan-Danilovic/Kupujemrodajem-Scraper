@@ -28,7 +28,7 @@ export function extractState(html: string, url: string): ReduxState {
     throw new BlockedError(`KP soft block: ${meta.softBlockError.reason} ${meta.softBlockError.description ?? ''}`.trim(), url);
   }
   if (antiBot.captchaSiteKey || Object.keys(antiBot.antiBotHumanCheck ?? {}).length || Object.keys(antiBot.areYouHumanError ?? {}).length) {
-    throw new BlockedError('KP anti-bot / captcha check triggered', url);
+    throw new BlockedError(`KP anti-bot / captcha check triggered: ${JSON.stringify(antiBot).slice(0, 500)}`, url);
   }
   return state;
 }

@@ -1,10 +1,11 @@
 #!/usr/bin/env -S npx tsx
+import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { ZodError } from 'zod';
 import { BlockedError, Fetcher } from './fetch.js';
-import { parseSearch, searchPageUrl } from './parseSearch.js';
+import { parseSearch, searchPageUrl, type SearchPage } from './parseSearch.js';
 import { extractRawAd, parseAd, parseSellerPage, type RawAdPayload, type SellerExtra } from './parseAd.js';
 import { sortAds, writeErrors, writeJson, writeXlsx, type Failure, type SortKey } from './export.js';
 import type { Ad } from './schema.js';
@@ -19,6 +20,8 @@ Options:
   --sort KEY        price | date | views (default: price, ascending; no-price last)
   --out DIR         output root (default: ./output); cache lives in DIR/.cache
   --skip-sellers    don't visit seller pages (no "active ads" count)
+  --delay MIN-MAX   seconds between requests (default: 1.5-4); slower = less likely to be blocked
+  --refresh-search  re-fetch result pages even if cached (cache is reused for 24h)
   -h, --help`;
 
 interface Options {
@@ -28,7 +31,11 @@ interface Options {
   sort: SortKey;
   out: string;
   skipSellers: boolean;
+  delayMs: [number, number];
+  refreshSearch: boolean;
 }
+
+const SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 function parseCli(): Options {
   const { values, positionals } = parseArgs({
@@ -39,6 +46,8 @@ function parseCli(): Options {
       sort: { type: 'string', default: 'price' },
       out: { type: 'string', default: './output' },
       'skip-sellers': { type: 'boolean', default: false },
+      delay: { type: 'string', default: '1.5-4' },
+      'refresh-search': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -65,7 +74,11 @@ function parseCli(): Options {
   };
   const sort = values.sort as SortKey;
   if (!['price', 'date', 'views'].includes(sort)) fail('--sort must be price, date or views');
+  const [dMin, dMax = dMin] = values.delay!.split('-').map(Number);
+  if (!(dMin! >= 1.5 && dMax! >= dMin!)) fail('--delay must be MIN-MAX seconds, MIN ≥ 1.5 (e.g. 5-10)');
   return {
+    delayMs: [dMin! * 1000, dMax! * 1000],
+    refreshSearch: values['refresh-search']!,
     url,
     maxPages: posInt('max-pages', values['max-pages']),
     limit: posInt('limit', values.limit),
@@ -73,6 +86,11 @@ function parseCli(): Options {
     out: values.out!,
     skipSellers: values['skip-sellers']!,
   };
+}
+
+interface CachedSearchPage {
+  savedAt: string;
+  page: SearchPage;
 }
 
 const AD_URL_RE = /\/oglas\/(\d+)/;
@@ -84,7 +102,11 @@ async function main() {
   const opts = parseCli();
   const started = Date.now();
   const outDir = path.resolve(opts.out, stamp());
-  const fetcher = new Fetcher({ cacheDir: path.resolve(opts.out, '.cache') });
+  const fetcher = new Fetcher({
+    cacheDir: path.resolve(opts.out, '.cache'),
+    minDelayMs: opts.delayMs[0],
+    maxDelayMs: opts.delayMs[1],
+  });
   const failures: Failure[] = [];
   const fail = (url: string, e: unknown) => {
     failures.push({ url, error: errMsg(e), at: new Date().toISOString() });
@@ -110,17 +132,29 @@ async function main() {
     queue.set(Number(singleAd[1]), opts.url);
   } else {
     let totalPages = 1;
+    const searchKey = createHash('sha1').update(searchPageUrl(opts.url, 1)).digest('hex').slice(0, 12);
     for (let page = 1; page <= Math.min(totalPages, opts.maxPages) && !stopReason; page++) {
       const url = searchPageUrl(opts.url, page);
       try {
-        const { html, finalUrl } = await fetcher.getHtml(url);
-        const res = parseSearch(html, finalUrl);
+        // Result pages are cached for 24h so resuming a run doesn't re-walk them.
+        const cacheId = `${searchKey}-p${page}`;
+        const cached = opts.refreshSearch ? undefined : await fetcher.readCache<CachedSearchPage>('search', cacheId);
+        let res: SearchPage;
+        let fromCacheTag = '';
+        if (cached && Date.now() - Date.parse(cached.savedAt) < SEARCH_CACHE_TTL_MS) {
+          res = cached.page;
+          fromCacheTag = ' [cache]';
+        } else {
+          const { html, finalUrl } = await fetcher.getHtml(url);
+          res = parseSearch(html, finalUrl);
+          await fetcher.writeCache('search', cacheId, { savedAt: new Date().toISOString(), page: res } satisfies CachedSearchPage);
+        }
         pagesScanned++;
         totalPages = res.pages || totalPages;
         searchTotal ??= res.total;
         const before = queue.size;
         for (const hit of res.hits) if (!queue.has(hit.id)) queue.set(hit.id, hit.url);
-        console.log(`Page ${page}/${totalPages}: ${res.hits.length} ads (${queue.size - before} new, ${queue.size} unique)`);
+        console.log(`Page ${page}/${totalPages}: ${res.hits.length} ads (${queue.size - before} new, ${queue.size} unique)${fromCacheTag}`);
         if (res.hits.length === 0) break;
       } catch (e) {
         if (e instanceof BlockedError) {
