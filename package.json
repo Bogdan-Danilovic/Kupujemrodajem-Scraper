@@ -1,0 +1,25 @@
+{
+  "name": "kupujemprodajem-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Polite CLI scraper for KupujemProdajem search results",
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "scripts": {
+    "scrape": "tsx src/scrape.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "exceljs": "^4.4.0",
+    "undici": "^7.30.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
